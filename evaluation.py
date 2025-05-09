@@ -9,10 +9,14 @@ from autogen.agentchat.contrib.img_utils import pil_to_data_uri
 import json
 import time
 import glob
+import os
+from dotenv import load_dotenv
 
+load_dotenv()  # loads variables from .env into os.environ
 
+api_key = os.getenv("OPENAI_API_KEY")
 # Set your OpenAI API key
-client = openai.OpenAI(api_key="REMOVED")
+client = openai.OpenAI(api_key=api_key)
 
 # File to save results
 input_file = "./gpqa_DeepSeek_R1_Distill_Qwen_14B_results.jsonl"

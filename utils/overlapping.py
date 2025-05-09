@@ -9,11 +9,15 @@ from io import BytesIO
 import base64
 from autogen.agentchat.contrib.img_utils import pil_to_data_uri
 import time
-import glob
+import os
+from dotenv import load_dotenv
 
 
+load_dotenv()  # loads variables from .env into os.environ
+
+api_key = os.getenv("OPENAI_API_KEY")
 # Set your OpenAI API key
-client = openai.OpenAI(api_key="REMOVED")
+client = openai.OpenAI(api_key=api_key)
 
 
 def split_text_by_phrases(text):
