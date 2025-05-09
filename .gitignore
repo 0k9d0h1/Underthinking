@@ -1,0 +1,7 @@
+outputs/
+utils/.gradio/
+utils/templates/
+utils/uploads/
+*.png
+*.txt
+.gradio/
