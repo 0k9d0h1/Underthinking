@@ -4,5 +4,7 @@ utils/templates/
 utils/uploads/
 *.png
 *.txt
+*.pkl
+*.json
 .gradio/
 .env

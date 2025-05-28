@@ -123,8 +123,8 @@ def process_jsonl_file(input_file, output_file):
 def main():
     # Set up argument parser
     parser = argparse.ArgumentParser(description='Evaluate model responses in JSONL files')
-    parser.add_argument('--input_file', help='Path to input JSONL file', default='./AIME_2024_DeepSeek_R1_Distill_Qwen_14B_results.jsonl')
-    parser.add_argument('--output_file', help='Path to output JSONL file (default: evaluated_[input_filename])', default='./AIME_2024_DeepSeek_R1_Distill_Qwen_14B_results_evaluation.jsonl')
+    parser.add_argument('--input_file', help='Path to input JSONL file', default='../outputs/Underthinking_Reproduction_AIME_2024_DeepSeek_R1_Distill_Qwen_14B_results.jsonl')
+    parser.add_argument('--output_file', help='Path to output JSONL file (default: evaluated_[input_filename])', default='../outputs/Underthinking_Reproduction_AIME_2024_DeepSeek_R1_Distill_Qwen_14B_results_evaluation.jsonl')
     
     args = parser.parse_args()
     

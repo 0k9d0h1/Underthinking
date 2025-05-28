@@ -110,10 +110,10 @@ def get_gpt4o_answer(question):
             print(f"Unexpected error: {e}")
             return None
 
-input_files = ["../outputs/gpqa_DeepSeek_R1_Distill_Qwen_14B_results.jsonl", "../outputs/AIME_2024_DeepSeek_R1_Distill_Qwen_14B_results.jsonl"]
-evaluation_files = ["../outputs/gpqa_DeepSeek_R1_Distill_Qwen_14B_results_evaluation.jsonl", "../outputs/AIME_2024_DeepSeek_R1_Distill_Qwen_14B_results_evaluation.jsonl"]
-output_file = "../outputs/Thought_cluster_4.1_Deepseek_R1_Distill_Qwen_14B.jsonl"
-split_output_file = "../outputs/Thought_split_Deepseek_R1_Distill_Qwen_14B.jsonl"
+input_files = ["../outputs/Underthinking_Reproduction_gpqa_DeepSeek_R1_Distill_Qwen_14B_results.jsonl", "../outputs/Underthinking_Reproduction_AIME_2024_DeepSeek_R1_Distill_Qwen_14B_results.jsonl"]
+evaluation_files = ["../outputs/Underthinking_Reproduction_gpqa_DeepSeek_R1_Distill_Qwen_14B_results_evaluation.jsonl", "../outputs/Underthinking_Reproduction_AIME_2024_DeepSeek_R1_Distill_Qwen_14B_results_evaluation.jsonl"]
+output_file = "../outputs/Underthinking_Reproduction_Thought_cluster_4.1_Deepseek_R1_Distill_Qwen_14B.jsonl"
+split_output_file = "../outputs/Underthinking_Reproduction_Thought_split_Deepseek_R1_Distill_Qwen_14B.jsonl"
 
 for input_file, evaluation_file in zip(input_files, evaluation_files):
     with open(input_file, "r") as f, open(evaluation_file, "r") as ef, open(output_file, "a") as of, open(split_output_file, "a") as sf:
@@ -162,7 +162,7 @@ Now classify the following thoughts using this format."""
             if len(phrases) > 1000 or len(phrases) == 0:
                 continue
 
-            # sf.write(json.dumps({"phrases": phrases}) + "\n")
+            sf.write(json.dumps({"phrases": phrases}) + "\n")
             
             for i, phrase in enumerate(phrases):
                 prompt += f"\n\nThought {i}: [{phrase}]"
@@ -173,3 +173,4 @@ Now classify the following thoughts using this format."""
                 "gpt4o_answer": response,
                 "correctness": correctness
             }) + "\n")
+            of.flush()

@@ -19,8 +19,8 @@ api_key = os.getenv("OPENAI_API_KEY")
 client = openai.OpenAI(api_key=api_key)
 
 # File to save results
-input_file = "./gpqa_DeepSeek_R1_Distill_Qwen_14B_results.jsonl"
-output_file = f"./{input_file.split('/')[1].split('.')[0]}_evaluation.jsonl"
+input_file = "../outputs/Underthinking_Reproduction_gpqa_DeepSeek_R1_Distill_Qwen_14B_results.jsonl"
+output_file = f"./{input_file.split('/')[-1].split('.')[0]}_evaluation.jsonl"
 
 # Function to get image URL or create a data URI
 def get_image_url(image):

@@ -16,7 +16,7 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
     torch_dtype=torch.bfloat16,
-    cache_dir="../cache_dir/kdh0901",
+    cache_dir="/home/kdh0901/Desktop/cache_dir/kdh0901",
     device_map="auto",  # This helps with initial allocation
     low_cpu_mem_usage=True  # This is important for large models
 )
