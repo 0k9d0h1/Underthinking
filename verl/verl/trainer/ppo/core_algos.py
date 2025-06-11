@@ -172,6 +172,8 @@ def compute_ppl_outcome_advantage(
     epsilon: float = 1e-6,
     norm_adv_by_std_in_grpo: str = True,
 ):
+    reward_for_phrases = [torch.tensor(r[r != float("-inf")], dtype=torch.float32) for r in reward_for_phrases]
+    phrase_token_lengths = [l[l != float("-inf")].astype(int) for l in phrase_token_lengths]
     id2reward_for_phrases = defaultdict(list)
     id2mean = {}
     id2std = {}
@@ -190,6 +192,7 @@ def compute_ppl_outcome_advantage(
                 id2std[idx] = torch.std(torch.tensor(id2reward_for_phrases[idx]))
             else:
                 raise ValueError(f"no score in prompt index: {idx}")
+            
         for i in range(bsz):
             if norm_adv_by_std_in_grpo:
                 reward_for_phrases[i] = (reward_for_phrases[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)

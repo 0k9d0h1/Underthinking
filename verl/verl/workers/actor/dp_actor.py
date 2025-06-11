@@ -21,6 +21,7 @@ import itertools
 import logging
 import os
 from typing import Tuple
+from tensordict import TensorDict
 
 import torch
 from torch import nn
@@ -295,6 +296,72 @@ class DataParallelPPOActor(BasePPOActor):
             log_probs = log_probs[revert_indices]
 
         return log_probs, entropys
+    
+    @GPUMemoryLogger(role="dp actor", logger=logger)
+    def calculate_loss(self, model_inputs, labels, n_gpus_per_node, pad_id, ignore_index=-100):
+        from tqdm import tqdm
+        # set to eval
+        self.actor_module.eval()
+        valid_rows = ~(
+            (model_inputs == pad_id).all(dim=1) & 
+            (labels == -ignore_index).all(dim=1)
+        )
+        model_inputs = model_inputs[valid_rows]
+        labels = labels[valid_rows]
+
+        B, L = model_inputs.shape
+        MAX_TOK = 16 * 1024   # 4 K × 1 K tokens per slice (tune yourself)
+        chunk_size = MAX_TOK // L
+        if chunk_size < 1:
+            chunk_size = 1
+
+        losses = []
+        for sl_in, sl_lab in zip(
+                tqdm(torch.split(model_inputs, chunk_size, dim=0)),
+                torch.split(labels,       chunk_size, dim=0)):
+            max_seq_len = self.actor_module.config.max_position_embeddings
+            sl_in = sl_in[:, :max_seq_len].to(get_torch_device().current_device())
+            sl_lab = sl_lab[:, :max_seq_len].to(get_torch_device().current_device())
+
+            with torch.inference_mode(), torch.autocast(
+                    device_type=self.device_name, dtype=torch.bfloat16):
+                logits = self.actor_module(sl_in).logits   # (b, L, V)
+
+            tgt = sl_lab[:, 1:]
+            loss_tok = nn.functional.cross_entropy(
+                logits[:, :-1, :].transpose(1, 2),  # (b, V, L-1)
+                tgt,
+                reduction="none",
+                ignore_index=-100,                  # mask inside CE
+            )
+            tok_mask = (tgt != -100)
+            per_seq = (loss_tok * tok_mask).sum(1) / tok_mask.sum(1)
+            losses.append(per_seq.cpu())
+
+            del logits, loss_tok
+
+        per_seq_loss = torch.cat(losses)      # (B,)
+
+        if per_seq_loss.shape[0] % n_gpus_per_node == 0:
+            return DataProto(
+                batch=TensorDict(
+                    {
+                        "per_seq_loss": per_seq_loss,
+                    },
+                    batch_size=[per_seq_loss.shape[0]]
+                )
+            )
+        pad_len = n_gpus_per_node - (per_seq_loss.shape[0] % n_gpus_per_node)
+        pad = torch.full((pad_len, ), -1.0, dtype=per_seq_loss.dtype, device=per_seq_loss.device)
+        return DataProto(
+            batch=TensorDict(
+                {
+                    "per_seq_loss": torch.cat([per_seq_loss, pad], dim=0),
+                },
+                batch_size=[per_seq_loss.shape[0] + pad_len]  # make sure the batch size is a multiple of n_gpus_per_node
+            )
+        )
+
 
     @GPUMemoryLogger(role="dp actor", logger=logger)
     def update_policy(self, data: DataProto):

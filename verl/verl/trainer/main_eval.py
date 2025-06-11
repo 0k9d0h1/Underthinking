@@ -26,6 +26,7 @@ import ray
 from tqdm import tqdm
 
 from verl.utils.fs import copy_to_local
+from verl.utils.reward_score import _default_compute_score
 
 
 def get_custom_reward_fn(config):
@@ -36,7 +37,9 @@ def get_custom_reward_fn(config):
     reward_fn_config = config.get("custom_reward_function") or {}
     file_path = reward_fn_config.get("path")
     if not file_path:
-        return None
+        def wrapped_fn(*args, **kwargs):
+            return _default_compute_score(*args, **kwargs)
+        return wrapped_fn
 
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Reward function file '{file_path}' not found.")
@@ -67,6 +70,8 @@ def get_custom_reward_fn(config):
 @ray.remote
 def process_item(reward_fn, data_source, response_lst, reward_data):
     ground_truth = reward_data["ground_truth"]
+    if isinstance(ground_truth, int) or isinstance(ground_truth, float):
+        ground_truth = str(ground_truth)
     score_lst = [reward_fn(data_source, r, ground_truth) for r in response_lst]
     return data_source, np.mean(score_lst)
 

@@ -47,6 +47,7 @@ from verl.trainer.ppo import core_algos
 from verl.trainer.ppo.core_algos import agg_loss
 from verl.trainer.ppo.metric_utils import (
     compute_data_metrics,
+    compute_data_metrics_ppl,
     compute_throughout_metrics,
     compute_timing_metrics,
     process_validation_metrics,
@@ -267,6 +268,8 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             response_mask=data.batch["response_mask"],
             index=data.non_tensor_batch["uid"],
         )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
     else:
         raise NotImplementedError
     return data
@@ -338,6 +341,7 @@ class RayPPOTrainer:
             AdvantageEstimator.REMAX,
             AdvantageEstimator.RLOO,
             AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE,
+            AdvantageEstimator.PPL,
         ]:
             self.use_critic = False
         else:
@@ -963,22 +967,29 @@ class RayPPOTrainer:
                     # compute global_valid tokens
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
 
-                    # put the actor model in batch to calculate perpelxities in the reward function
-                    batch.non_tensor_batch["extra_info"] = {
-                        "actor_model": self.actor_rollout_wg.actor.actor_module,
+                    # put the ref model in batch to calculate perpelxities in the reward function
+                    batch.non_tensor_batch["extra_info"] = np.array([{
+                        "ref_rollout_wg": self.ref_policy_wg,
                         "tokenizer": self.tokenizer,
-                    }
+                        "n_gpus_per_node": self.config.trainer.n_gpus_per_node,
+                    }] * batch.batch["input_ids"].shape[0])
 
                     with _timer("reward", timing_raw):
                         # compute reward model score
                         if self.use_rm:
-                            reward_tensor = self.rm_wg.compute_rm_score(batch)
-                            batch = batch.union(reward_tensor)
+                            if self.config.algorithm.adv_estimator == AdvantageEstimator.PPL:
+                                output = self.rm_wg.compute_rm_score(batch)
+                                batch = batch.union(output)
+                                reward_for_phrases = output.non_tensor_batch["reward_for_phrases"]
+                                phrase_token_lengths = output.non_tensor_batch["phrase_token_lengths"]
+                            else:
+                                reward_tensor = self.rm_wg.compute_rm_score(batch)
+                                batch = batch.union(reward_tensor)
 
                         if self.config.reward_model.launch_reward_fn_async:
                             future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
                         elif self.config.algorithm.adv_estimator == AdvantageEstimator.PPL:
-                            reward_for_phrases, phrase_token_lengths, reward_extra_infos_dict = compute_reward_ppl(batch, self.reward_fn, self.tokenizer)
+                            reward_for_phrases, phrase_token_lengths, reward_extra_infos_dict = compute_reward_ppl(batch, self.reward_fn)
                         else:
                             reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
 
@@ -1025,6 +1036,8 @@ class RayPPOTrainer:
                         if self.config.algorithm.use_kl_in_reward:
                             batch, kl_metrics = apply_kl_penalty(batch, kl_ctrl=self.kl_ctrl_in_reward, kl_penalty=self.config.algorithm.kl_penalty)
                             metrics.update(kl_metrics)
+                        elif self.config.algorithm.adv_estimator == AdvantageEstimator.PPL:
+                            pass
                         else:
                             batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
 
@@ -1094,7 +1107,10 @@ class RayPPOTrainer:
                     }
                 )
                 # collect metrics
-                metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+                if self.config.algorithm.adv_estimator == AdvantageEstimator.PPL:
+                    metrics.update(compute_data_metrics_ppl(batch=batch, use_critic=self.use_critic))
+                else:
+                    metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()

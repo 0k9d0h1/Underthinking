@@ -40,6 +40,9 @@ from verl.utils.model import compute_position_id_with_mask
 from verl.workers.fsdp_workers import ActorRolloutRefWorker
 from verl.utils.device import is_cuda_available
 
+import torch
+from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path
+
 
 @hydra.main(config_path="config", config_name="generation", version_base=None)
 def main(config):
@@ -55,7 +58,6 @@ def run_generation(config) -> None:
         )
 
     ray.get(main_task.remote(config))
-
 
 @ray.remote(num_cpus=1)
 def main_task(config):

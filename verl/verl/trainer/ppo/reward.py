@@ -125,15 +125,15 @@ def compute_reward(data: DataProto, reward_fn):
     return reward_tensor, reward_extra_infos_dict
 
 def compute_reward_ppl(data: DataProto, reward_fn):
-    try:
-        reward_result = reward_fn(data, return_dict=True)
-        reward_for_phrases = reward_result["reward_for_phrases"]
-        phrase_token_lengths = reward_result["phrase_token_lengths"]
-        reward_extra_infos_dict = reward_result["reward_extra_info"]
-    except Exception as e:
-        print(f"Error in reward_fn: {e}")
-        reward_for_phrases, phrase_token_lengths = reward_fn(data)
-        reward_extra_infos_dict = {}
+    # try:
+    reward_result = reward_fn(data, return_dict=True)
+    reward_for_phrases = reward_result["reward_for_phrases"]
+    phrase_token_lengths = reward_result["phrase_token_lengths"]
+    reward_extra_infos_dict = reward_result["reward_extra_info"]
+    # except Exception as e:
+    #     print(f"Error in reward_fn: {e}")
+    #     reward_for_phrases, phrase_token_lengths = reward_fn(data)
+    #     reward_extra_infos_dict = {}
 
     return reward_for_phrases, phrase_token_lengths, reward_extra_infos_dict
 

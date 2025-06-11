@@ -1,4 +1,6 @@
 outputs/
+wandb/
+model_outputs/
 utils/.gradio/
 utils/templates/
 utils/uploads/
@@ -8,3 +10,4 @@ utils/uploads/
 *.json
 .gradio/
 .env
+temp.py
