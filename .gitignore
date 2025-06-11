@@ -4,11 +4,12 @@ model_outputs/
 utils/.gradio/
 utils/templates/
 utils/uploads/
+PRM/gen_vllm/
+PRM/reg_dp/
 *.png
 *.txt
 *.pkl
 *.json
-*.arrow
 .gradio/
 .env
 temp.py
