@@ -8,6 +8,7 @@ utils/uploads/
 *.txt
 *.pkl
 *.json
+*.arrow
 .gradio/
 .env
 temp.py
