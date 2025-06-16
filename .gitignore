@@ -10,6 +10,8 @@ PRM/reg_dp/
 *.txt
 *.pkl
 *.json
+*.1
+*.2
 .gradio/
 .env
 temp.py

@@ -1201,7 +1201,7 @@ class RewardModelWorker(Worker):
             input_ids = micro_batch["input_ids"]
             batch_size, seqlen = input_ids.shape
             attention_mask = micro_batch["attention_mask"]
-            position_ids = micro_batch["position_ids"]
+            position_ids = micro_batch.get("position_ids", None)
 
             if self.use_remove_padding:
                 input_ids_rmpad, indices, *_ = unpad_input(input_ids.unsqueeze(-1), attention_mask)  # input_ids_rmpad (total_nnz, ...)
@@ -1370,7 +1370,7 @@ class RewardModelWorker(Worker):
         output = output.to("cpu")
         return output
 
-    def _remove_leading_words(text: str) -> str:
+    def _remove_leading_words(self, text: str) -> str:
         starters = ["Wait", "Hmm", "Alternatively", "But wait"]
         txt = text.lstrip()
         for s in starters:
@@ -1380,8 +1380,9 @@ class RewardModelWorker(Worker):
         return txt
 
     def _split_string_and_ids(
-        ids: list[int],
-        delims: list[str],
+        self,
+        ids,
+        delims,
         tok
     ) -> tuple[list[str], list[list[int]]]:
         """Token-aligned split that avoids breaking multi-token delimiters."""
@@ -1420,6 +1421,7 @@ class RewardModelWorker(Worker):
         assert sum(id_parts, []) == ids
         return txt_parts, id_parts
 
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def compute_rm_score_ppl(self, data: DataProto):
         import itertools
 
@@ -1428,187 +1430,167 @@ class RewardModelWorker(Worker):
         """
         Compute the reward model score for perplexity.
         """
-        split_str = ["</think>", "Alternatively", "Wait", "Hmm", "But wait"]
-        min_len = 100
-        max_samples = 8
         previous_text_strategy = "random"
         # Support all hardwares
         data = data.to(get_torch_device().current_device())
 
-        extra_info       = data.non_tensor_batch["extra_info"][0]
+        extra    = data.non_tensor_batch["extra_info"][0]
         data_source      = data.non_tensor_batch["data_source"][0]
-        tok              = extra_info["tokenizer"]
-        n_gpus_per_node  = int(extra_info["n_gpus_per_node"])
+        tok      = extra["tokenizer"]
+        n_gpu    = int(extra["n_gpus_per_node"])
 
-        ids          = data.batch["input_ids"]       # (B, L)
-        attn         = data.batch["attention_mask"]  # (B, L)
-        position_ids = data.batch["position_ids"]    # kept for API symmetry, unused
-        prompt_ids   = data.batch["prompts"]
+        ids      = data.batch["input_ids"]          # (B,L)
+        attn     = data.batch["attention_mask"]     # (B,L)
+        prompts  = data.batch["prompts"]            # (B,L)
 
-        batch_size = ids.size(0)
-        seq_scores = []                # scalar PPL reward per sequence
-        phrases_tok_lengths = []
+        split_str       = ["</think>", "Alternatively", "Wait", "Hmm", "But wait"]
+        min_len         = 100
+        max_samples     = 8
+        rng             = random.Random(42)
 
-        rng = random.Random(42)        # deterministic sampling of j’s
+        ### ---------------------------------------------------------------
+        # 1. build global *pairs* list and bookkeeping to map back later
+        ### ---------------------------------------------------------------
+        all_pairs_texts   = []     # full concat "t1 + t2"
+        pair2seq          = []     # (seq_idx, phrase_i) for each pair
+        phrases_per_seq   = []     # list[list[str]]
+        lengths_per_seq   = []     # list[list[int]]
 
-        for b in range(batch_size):
-            ground_truth = data.non_tensor_batch["ground_truth"][b]
-            prompt_length = prompt_ids[b].shape[-1]
-            seq_ids_length = attn[prompt_length:].sum()
-            seq_ids_list = ids[b, :seq_ids_length].tolist()
-            seq_tok_len = len(seq_ids_list)
+        all_gts = []
+        all_seq_tokens = []
 
-            model_response = tok.decode(seq_ids_list, skip_special_tokens=True)
-            print(f"{model_response}")
+        for b in range(ids.size(0)):
+            # ---------- extract model response ---------------------------
+            ground_truth = data.non_tensor_batch["reward_model"][b]["ground_truth"]
+            idx1 = (attn[b] == 1).nonzero(as_tuple=True)[0][0].item()
+            prompt_len = (prompts[b] != tok.pad_token_id).sum().item()
+            seq_len    = attn[b, idx1 + prompt_len :].sum().item()
+            seq_tokens = ids[b, idx1 + prompt_len : idx1 + prompt_len + seq_len].tolist()
+            phrases, id_slices = self._split_string_and_ids(seq_tokens, split_str, tok)
+            phrases_per_seq.append(phrases)
+            lengths_per_seq.append([len(x) for x in id_slices])
+            all_gts.append(ground_truth)
+            all_seq_tokens.append(seq_tokens)
 
-            phrases, id_slices = self._split_string_and_ids(
-                seq_ids_list,
-                delims=split_str,
-                tok=tok
-            )
-            phrase_token_lengths = [len(ids) for ids in id_slices]
-            phrases_tok_lengths.append(phrase_token_lengths)
+            # ---------- find </think> boundary ---------------------------
+            end_idx = next((i for i,p in enumerate(phrases) if "</think>" in p), len(phrases))
 
-            end_of_think_index = len(phrases)
-            for i, phrase in enumerate(phrases):
-                if "</think>" in phrase:
-                    end_of_think_index = i
-
-            pairs = []
-            for i in range(1, end_of_think_index):
-                if len(phrases[i]) < min_len:
-                    continue
-
-                # ----- possible j’s that also satisfy the length constraint --------
+            # ---------- collect (i,j) pairs ------------------------------
+            for i in range(1, end_idx):
+                if len(phrases[i]) < min_len: continue
                 eligible_js = [j for j in range(i) if len(phrases[j]) >= min_len]
+                if not eligible_js: continue
+                chosen_js   = rng.sample(eligible_js, min(max_samples, len(eligible_js)))
+                for j in chosen_js:
+                    t1 = phrases[j] + "\n\nThat is, "
+                    t2 = self._remove_leading_words(phrases[i])
+                    all_pairs_texts.append(t1 + t2)
+                    pair2seq.append((b, i))          # remember owner
 
-                if not eligible_js:
-                    # No valid previous phrase; we’ll leave the reward for slice i = 0
-                    continue
+        if not all_pairs_texts:                               # batch had no valid pairs
+            Z = np.zeros((ids.size(0), 1), dtype=np.float32)
+            return DataProto(non_tensor_batch={
+                "reward_for_phrases": Z,
+                "phrase_token_lengths": np.zeros_like(Z),
+            })
 
-                if previous_text_strategy == "random":
-                    if len(eligible_js) <= max_samples:
-                        selected_js = eligible_js
-                    else:
-                        selected_js = rng.sample(eligible_js, max_samples)
-                    
-                elif previous_text_strategy == "all":
-                    selected_js = eligible_js
+        ### ---------------------------------------------------------------
+        # 2. tokenise once for the whole batch of pairs
+        ### ---------------------------------------------------------------
+        enc          = tok(all_pairs_texts, return_tensors="pt", padding=True)
+        inp_ids      = enc.input_ids
+        attn_mask    = enc.attention_mask
+        pos_ids      = compute_position_id_with_mask(attn_mask)
+        pad_id       = tok.pad_token_id
 
-                for j in selected_js:
-                    text1 = phrases[j] + "\n\nThat is, "
-                    text2 = self._remove_leading_words(phrases[i])
-                    pairs.append((i, j, text1, text2))
+        import torch.distributed as dist
+        local_rows = torch.tensor([inp_ids.size(0)], device=inp_ids.device)
+        dist.all_reduce(local_rows, op=dist.ReduceOp.MAX)
+        max_rows = local_rows.item()
+        max_rows = max_rows + (n_gpu - (max_rows % n_gpu)) if max_rows % n_gpu != 0 else max_rows
 
-            if not pairs:
-                seq_scores.append(np.array([0.0] * len(phrase_token_lengths)))
-                continue
+        pad_rows = max_rows - inp_ids.size(0)
+        pad_tensor = lambda t,val=0: torch.cat([t, val * torch.ones_like(t[:1]).expand(pad_rows, -1)], 0)
+        inp_ids   = pad_tensor(inp_ids,  pad_id)
+        pad_attn  = torch.zeros((pad_rows, attn_mask.size(1)), dtype=attn_mask.dtype, device=attn_mask.device)
+        pad_attn[:, -1] = 1.0
+        attn_mask = torch.cat([attn_mask, pad_attn], 0)
+        pad_pos_ids = torch.zeros((pad_rows, pos_ids.size(1)), dtype=pos_ids.dtype, device=pos_ids.device)
+        pad_pos_ids[:, -1] = 1.0
+        pos_ids   = torch.cat([pos_ids, pad_pos_ids], 0)
 
-            texts      = [p[2] + p[3] for p in pairs]
-            enc = tok(texts, return_tensors="pt", padding=True)
-            inp_ids = enc.input_ids          # (B, T)
-            attn_mask = enc.attention_mask  # (B, T)
-            pad_id = tok.pad_token_id
+        rm_inputs = {"input_ids": inp_ids, "attention_mask": attn_mask, "position_ids": pos_ids}
+        rm_dp     = DataProto.from_dict(rm_inputs)
 
-            num_ex = inp_ids.size(0)
-            if num_ex % n_gpus_per_node != 0:
-                pad = n_gpus_per_node - (num_ex % n_gpus_per_node)
-                pad_inp = torch.full((pad, inp_ids.size(1)), pad_id, dtype=inp_ids.dtype)
-                pad_attn_mask = torch.zeros((pad, attn_mask.size(1)), dtype=attn_mask.dtype)
-                inp_ids = torch.cat([inp_ids, pad_inp], dim=0)
-                attn_mask = torch.cat([attn_mask, pad_attn_mask], dim=0)
+        ### ---------------------------------------------------------------
+        # 3. forward through reward model with dynamic or static splits
+        ### ---------------------------------------------------------------
+        use_dyn = self.config.use_dynamic_bsz
+        if use_dyn:
+            max_tok = self.config.forward_max_token_len_per_gpu * self.ulysses_sequence_parallel_size
+            mbatches,_ = rearrange_micro_batches(rm_dp.batch, max_tok)
+        else:
+            mbatches = rm_dp.batch.split(self.config.micro_batch_size_per_gpu)
+        
+        scores = []
+        for mb in mbatches:
+            # skip score calculation for dummies so they don’t consume GPU time
+            s = self._forward_micro_batch(mb)
+            scores.append(s)
+        scores = torch.cat(scores, 0)[: len(all_pairs_texts)]  # every rank same length
 
-            seq_losses = []
-            rm_inputs = {
-                "input_ids": inp_ids,
-                "attention_mask": attn_mask,
-            }
-            rm_data = DataProto.from_dict(rm_inputs)
+        ### ---------------------------------------------------------------
+        # 4. scatter per-pair scores back to per-sequence rewards
+        ### ---------------------------------------------------------------
+        # build containers
+        ppl_per_phrase = [
+            {k: [] for k in range(1, len(phrases_per_seq[b]))}
+            for b in range(ids.size(0))
+        ]
+        for (seq_idx, phrase_i), sc in zip(pair2seq, scores):
+            ppl_per_phrase[seq_idx][phrase_i].append(sc.item())
 
-            # Support all hardwares
-            rm_data.batch = rm_data.batch.to(get_torch_device().current_device())
-
-            # perform forward computation
-            with self.ulysses_sharding_manager:
-                rm_data = self.ulysses_sharding_manager.preprocess_data(data=rm_data)
-                data = self.ulysses_sharding_manager.preprocess_data(data=data)
-
-                use_dynamic_bsz = self.config.use_dynamic_bsz
-                if use_dynamic_bsz:
-                    max_token_len = self.config.forward_max_token_len_per_gpu * self.ulysses_sequence_parallel_size
-                    micro_batches, indices = rearrange_micro_batches(batch=rm_data.batch, max_token_len=max_token_len)
-                else:
-                    micro_batches = rm_data.batch.split(self.config.micro_batch_size_per_gpu)
-
-                for micro_batch in micro_batches:
-                    rm_score = self._forward_micro_batch(micro_batch)
-                    seq_losses.append(rm_score)
-                scores = torch.cat(seq_losses, dim=0)  # (batch_size)
-
-                if use_dynamic_bsz:
-                    indices = list(itertools.chain.from_iterable(indices))
-                    assert len(indices) == scores.size(0), f"{len(indices)} vs. {scores.size()}"
-                    revert_indices = torch.tensor(get_reverse_idx(indices), dtype=torch.long)
-                    scores = scores[revert_indices]
-
-                # Note that this is only the scores, may not be the final rewards used to train RL
-                output = DataProto.from_dict(tensors={"rm_scores": scores})
-                output = self.ulysses_sharding_manager.postprocess_data(data=output)
-            
-            ppl_rewards = output.batch["rm_scores"][:len(pairs)]  # (num_pairs,)
-            ppl_per_phrase = {k: [] for k in range(1, end_of_think_index)}
-            for (i, *_), ppl_val in zip(pairs, ppl_rewards):
-                ppl_per_phrase[i].append(ppl_val.item())
-            
+        seq_rewards  = []
+        for b, phrases in enumerate(phrases_per_seq):
+            end_idx = next((i for i,p in enumerate(phrases) if "</think>" in p), len(phrases))
             rewards = []
-            for i in range(1, end_of_think_index):
-                grp = ppl_per_phrase[i]
-                rewards.append(sum(grp) / len(grp) if grp else 0.0)
+            for i in range(1, end_idx):
+                grp = ppl_per_phrase[b][i]
+                rewards.append(sum(grp)/len(grp) if grp else 0.0)
+            arr = np.zeros(len(phrases), dtype=np.float32)
+            arr[1: 1+len(rewards)] = rewards
+            # normalise centre & scale only on valid slices
+            valid = [ (len(phrases[i])>=min_len and len(ppl_per_phrase[b][i])>0) for i in range(1,end_idx) ]
+            if any(valid):
+                v  = np.array(rewards)[valid]
+                arr[1:1+len(rewards)][valid] = (v - v.mean()) / (np.abs(v - v.mean()).max() or 1.)
             
-            rewards_arr = np.array(rewards)
-            valid_mask = np.array([
-                (len(phrases[i]) >= min_len) and (len(ppl_per_phrase[i]) > 0)
-                for i in range(1, end_of_think_index)          # phrase indices 1..K
-            ])
-            if valid_mask.any():
-                center = rewards_arr[valid_mask].mean()
-                rewards_arr[valid_mask] = rewards_arr[valid_mask] - center
-
-                scale = np.abs(rewards_arr[valid_mask]).max()
-                if scale != 0.0:
-                    rewards_arr[valid_mask] = rewards_arr[valid_mask] / scale
-            rewards_arr[~valid_mask] = 0.0
-            # prepend 0.0 for the pre-amble slice
-            rewards_arr = np.insert(rewards_arr, 0, 0.0)
-
-            # pad with zeros after </think>
-            rewards_arr = np.append(rewards_arr, [0.0] * (len(phrases) - end_of_think_index))
-
+            model_response = tok.decode(all_seq_tokens[b], skip_special_tokens=True)
             acc_reward = _default_compute_score(
                 data_source=data_source,
                 solution_str=model_response,
-                ground_truth=ground_truth,
+                ground_truth=all_gts[b],
             )
-            rewards_arr += acc_reward
-            seq_scores.append(rewards_arr)
-            
-        def pad_and_stack(list_of_lists, pad_value=float("-inf")):
-            max_len = max(len(lst) for lst in list_of_lists)
-            arr = np.full((len(list_of_lists), max_len), pad_value)
-            for i, row in enumerate(list_of_lists):
-                arr[i, :len(row)] = row
-            return arr
-        
-        batch_reward_for_phrases = pad_and_stack(seq_scores)
-        batch_phrase_token_lengths = pad_and_stack(phrases_tok_lengths)
-        output = DataProto(
+            arr += acc_reward
+            # pad after </think>
+            seq_rewards.append(arr)
+        ### ---------------------------------------------------------------
+        # 5. numpy-pad to max_len (4096) and pack into DataProto
+        ### ---------------------------------------------------------------
+        def pad_to(arrs, pad_val=float("-inf"), width=4096):
+            out = np.full((len(arrs), width), pad_val, dtype=np.float32)
+            for i,a in enumerate(arrs): out[i,:len(a)] = a
+            return out
+
+        reward_for_phrases   = pad_to(seq_rewards)
+        phrase_token_lengths = pad_to(lengths_per_seq)
+
+        return DataProto(
             non_tensor_batch={
-                "reward_for_phrases": batch_reward_for_phrases,
-                "phrase_token_lengths": batch_phrase_token_lengths,
+                "reward_for_phrases":   reward_for_phrases,
+                "phrase_token_lengths": phrase_token_lengths,
             }
         )
-
-        return output
 
 
 # ================================= Async related workers =================================

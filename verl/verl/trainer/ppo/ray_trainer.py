@@ -968,30 +968,35 @@ class RayPPOTrainer:
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
 
                     # put the ref model in batch to calculate perpelxities in the reward function
-                    batch.non_tensor_batch["extra_info"] = np.array([{
-                        "ref_rollout_wg": self.ref_policy_wg,
+                    if self.use_rm:
+                        batch.non_tensor_batch["extra_info"] = np.array([{
                         "tokenizer": self.tokenizer,
                         "n_gpus_per_node": self.config.trainer.n_gpus_per_node,
                     }] * batch.batch["input_ids"].shape[0])
+                    else:
+                        batch.non_tensor_batch["extra_info"] = np.array([{
+                            "ref_rollout_wg": self.ref_policy_wg,
+                            "tokenizer": self.tokenizer,
+                            "n_gpus_per_node": self.config.trainer.n_gpus_per_node,
+                        }] * batch.batch["input_ids"].shape[0])
 
                     with _timer("reward", timing_raw):
                         # compute reward model score
                         if self.use_rm:
                             if self.config.algorithm.adv_estimator == AdvantageEstimator.PPL:
-                                output = self.rm_wg.compute_rm_score(batch)
-                                batch = batch.union(output)
+                                output = self.rm_wg.compute_rm_score_ppl(batch)
                                 reward_for_phrases = output.non_tensor_batch["reward_for_phrases"]
                                 phrase_token_lengths = output.non_tensor_batch["phrase_token_lengths"]
                             else:
                                 reward_tensor = self.rm_wg.compute_rm_score(batch)
                                 batch = batch.union(reward_tensor)
-
-                        if self.config.reward_model.launch_reward_fn_async:
-                            future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
-                        elif self.config.algorithm.adv_estimator == AdvantageEstimator.PPL:
-                            reward_for_phrases, phrase_token_lengths, reward_extra_infos_dict = compute_reward_ppl(batch, self.reward_fn)
                         else:
-                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
+                            if self.config.reward_model.launch_reward_fn_async:
+                                future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
+                            elif self.config.algorithm.adv_estimator == AdvantageEstimator.PPL:
+                                reward_for_phrases, phrase_token_lengths, reward_extra_infos_dict = compute_reward_ppl(batch, self.reward_fn)
+                            else:
+                                reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
 
                     # recompute old_log_probs
                     with _timer("old_log_prob", timing_raw):
@@ -1019,7 +1024,7 @@ class RayPPOTrainer:
 
                     with _timer("adv", timing_raw):
                         # we combine with rule-based rm
-                        reward_extra_infos_dict: dict[str, list]
+                        reward_extra_infos_dict = {}
                         if self.config.reward_model.launch_reward_fn_async:
                             reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
                         if self.config.algorithm.adv_estimator == AdvantageEstimator.PPL:
