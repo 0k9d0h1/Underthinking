@@ -58,6 +58,7 @@ from verl.utils.import_utils import import_external_libs
 from verl.utils.model import compute_position_id_with_mask
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 from verl.utils.device import get_device_name, get_torch_device, is_cuda_available, is_npu_available
+from typing import List, Dict
 
 
 logger = logging.getLogger(__file__)
@@ -1497,9 +1498,55 @@ class RewardModelWorker(Worker):
         ### ---------------------------------------------------------------
         # 2. tokenise once for the whole batch of pairs
         ### ---------------------------------------------------------------
-        enc          = tok(all_pairs_texts, return_tensors="pt", padding=True)
-        inp_ids      = enc.input_ids
-        attn_mask    = enc.attention_mask
+        def batched_tokenize(
+            texts: List[str],
+            tokenizer,
+            *,
+            batch_size: int | None = 1024,        # fixed #examples per chunk
+            token_budget: int | None = None,      # or max total tokens per chunk
+            device: str = "cpu",                  # keep tensors on CPU for now
+        ) -> Dict[str, torch.Tensor]:
+            """
+            Tokenise a long list of `texts` in small chunks to avoid OOM.
+            Returns a dict with concatenated `input_ids`, `attention_mask`, ...
+            """
+            assert (batch_size is None) ^ (token_budget is None), \
+                "Specify exactly one of batch_size or token_budget"
+
+            def _tokenise(chunk: List[str]) -> Dict[str, torch.Tensor]:
+                return tokenizer(
+                    chunk,
+                    return_tensors="pt",
+                    padding="max_length",
+                    max_length=16384
+                )
+
+            # first pass: decide chunk boundaries
+            batches, cur, cur_tokens = [], [], 0
+            if token_budget is not None:
+                for txt in texts:
+                    ln = tokenizer(txt, add_special_tokens=False,
+                                return_length=True)["length"][0]
+                    if cur and cur_tokens + ln > token_budget:
+                        batches.append(cur); cur, cur_tokens = [], 0
+                    cur.append(txt); cur_tokens += ln
+                if cur: batches.append(cur)
+            else:  # fixed batch size
+                for i in range(0, len(texts), batch_size):
+                    batches.append(texts[i : i + batch_size])
+
+            # tokenise & collect
+            tensor_lists = {}                 # key -> list[tensor]
+            for chunk in batches:
+                enc = _tokenise(chunk)
+                for k, v in enc.items():
+                    tensor_lists.setdefault(k, []).append(v.to(device))
+
+            # concatenate
+            return {k: torch.cat(vs, dim=0) for k, vs in tensor_lists.items()}
+        enc          = batched_tokenize(all_pairs_texts, tok)
+        inp_ids      = enc["input_ids"]
+        attn_mask    = enc["attention_mask"]
         pos_ids      = compute_position_id_with_mask(attn_mask)
         pad_id       = tok.pad_token_id
 
