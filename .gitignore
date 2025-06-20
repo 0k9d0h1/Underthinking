@@ -10,6 +10,7 @@ PRM/reg_dp/
 *.txt
 *.pkl
 *.json
+*.jsonl
 *.1
 *.2
 .gradio/
