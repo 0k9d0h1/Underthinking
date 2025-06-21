@@ -12,5 +12,5 @@ datasets=(
 
 for name in "${!datasets[@]}"; do
     n_samples=${datasets[$name]}
-    python3 -m generation.py --model_name $model_name --dataset_name $name --rollout_num $n_samples
+    python3 -m generation --model_name $model_name --dataset_name $name --rollout_num $n_samples
 done

@@ -25,6 +25,7 @@ def main(args):
     llm = LLM(
         model=model_name,
         dtype="bfloat16",
+        tensor_parallel_size=2,
         gpu_memory_utilization=args.gpu_memory_utilization,
         download_dir="/home/kdh0901/Desktop/cache_dir/kdh0901",
         max_model_len=args.max_tokens
