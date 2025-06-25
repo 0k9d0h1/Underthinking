@@ -15,21 +15,27 @@ import pickle
 from statistics import mean
 from tabulate import tabulate
 import argparse
+import re
+
 
 def main(args):
     model_name = args.model_name
-    thought_split_file   = f"./{model_name.split('/')[-1].replace('-', '_')}/thought_split.jsonl"
-    thought_cluster_file = f"./{model_name.split('/')[-1].replace('-', '_')}/thought_clustering.jsonl"
+    thought_split_file = (
+        f"./{model_name.split('/')[-1].replace('-', '_')}/thought_split.jsonl"
+    )
+    thought_cluster_file = (
+        f"./{model_name.split('/')[-1].replace('-', '_')}/thought_clustering.jsonl"
+    )
 
     # accumulators
     total = 0
     thoughts_correct = thoughts_incorrect = 0
-    cluster_correct  = cluster_incorrect  = 0
+    cluster_correct = cluster_incorrect = 0
 
-    cluster_thoughts_ratio_correct   = []
+    cluster_thoughts_ratio_correct = []
     cluster_thoughts_ratio_incorrect = []
     # === NEW: collect cluster sequences for revisit-rate ===
-    cluster_sequences_correct   = []
+    cluster_sequences_correct = []
     cluster_sequences_incorrect = []
 
     def revisit_rate(seqs):
@@ -37,7 +43,7 @@ def main(args):
         for seq in seqs:
             if not seq:
                 continue
-            segments = [k for k,_ in groupby(seq)]
+            segments = [k for k, _ in groupby(seq)]
             seen, revisits, changes = {segments[0]}, 0, 0
             for prev, curr in zip(segments, segments[1:]):
                 if curr != prev:
@@ -48,14 +54,14 @@ def main(args):
             total += (revisits / changes) if changes else 0.0
         return total / len(seqs) if seqs else 0.0
 
+    with open(thought_split_file, "r") as f1, open(thought_cluster_file, "r") as f2:
 
-    with open(thought_split_file,   'r') as f1, \
-        open(thought_cluster_file, 'r') as f2:
-
-        thoughts_split   = [json.loads(line) for line in f1]
+        thoughts_split = [json.loads(line) for line in f1]
         thoughts_cluster = [json.loads(line) for line in f2]
 
-        for i, (split, cluster) in tqdm(enumerate(zip(thoughts_split, thoughts_cluster))):
+        for i, (split, cluster) in tqdm(
+            enumerate(zip(thoughts_split, thoughts_cluster))
+        ):
             phrases = split["phrases"]
             filtered = [p for p in phrases if len(p) > 100]
             n_phr = len(filtered)
@@ -63,7 +69,8 @@ def main(args):
                 continue
 
             correct = cluster["correctness"]
-            gpt4o  = cluster["gpt4o_answer"]
+            gpt4o = cluster["gpt4o_answer"]
+            gpt4o = re.sub(r"\([^)]*\)", "", gpt4o)
 
             # build mapping: thought index -> cluster label
             thought_to_cluster = {}
@@ -84,7 +91,7 @@ def main(args):
 
             # sort by thought idx -> get sequence of cluster labels
             sorted_items = sorted(thought_to_cluster.items(), key=lambda x: x[0])
-            cluster_seq   = [label for _, label in sorted_items]
+            cluster_seq = [label for _, label in sorted_items]
             total += 1
 
             # --- APPEND to the correct list for revisit-rate ---
@@ -96,11 +103,11 @@ def main(args):
             # update counts & ratios
             if correct:
                 thoughts_correct += n_phr
-                cluster_correct  += len(set(cluster_seq))
+                cluster_correct += len(set(cluster_seq))
                 cluster_thoughts_ratio_correct.append(len(set(cluster_seq)) / n_phr)
             else:
                 thoughts_incorrect += n_phr
-                cluster_incorrect  += len(set(cluster_seq))
+                cluster_incorrect += len(set(cluster_seq))
                 cluster_thoughts_ratio_incorrect.append(len(set(cluster_seq)) / n_phr)
 
     # === FINAL REPORT ===
@@ -113,13 +120,24 @@ def main(args):
     print(f"Revisit Rate (✔): {revisit_rate(cluster_sequences_correct):.4f}")
     print(f"Revisit Rate (✘): {revisit_rate(cluster_sequences_incorrect):.4f}")
 
-    print(f"Avg #clusters/phrase (✔): {sum(cluster_thoughts_ratio_correct)/len(cluster_thoughts_ratio_correct):.4f}")
-    print(f"Avg #clusters/phrase (✘): {sum(cluster_thoughts_ratio_incorrect)/len(cluster_thoughts_ratio_incorrect):.4f}")
+    print(
+        f"Avg #clusters/phrase (✔): {sum(cluster_thoughts_ratio_correct)/len(cluster_thoughts_ratio_correct):.4f}"
+    )
+    print(
+        f"Avg #clusters/phrase (✘): {sum(cluster_thoughts_ratio_incorrect)/len(cluster_thoughts_ratio_incorrect):.4f}"
+    )
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Analyze thought clustering and splitting results.")
-    parser.add_argument("--model_name", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-                        help="Name of the model to use for analysis.")
+    parser = argparse.ArgumentParser(
+        description="Analyze thought clustering and splitting results."
+    )
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        help="Name of the model to use for analysis.",
+    )
     args = parser.parse_args()
-    
+
     main(args)

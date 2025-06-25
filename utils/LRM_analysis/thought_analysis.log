@@ -1,0 +1,9 @@
+Total problems: 636
+Thoughts Correct:   23.781446540880502
+Thoughts Incorrect: 55.15251572327044
+Clusters Correct:   3.710691823899371
+Clusters Incorrect: 5.084905660377358
+Revisit Rate (✔): 0.4336
+Revisit Rate (✘): 0.6150
+Avg #clusters/phrase (✔): 0.2936
+Avg #clusters/phrase (✘): 0.1257

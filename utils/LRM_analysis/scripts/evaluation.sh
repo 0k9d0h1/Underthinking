@@ -5,5 +5,5 @@ model_name=deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
 datasets=("Maxwell-Jia/AIME_2024" "yentinglin/aime_2025" "gpqa")
 
 for name in "${datasets[@]}"; do
-    python3 -m evaluation.py --model_name $model_name --dataset_name $name
+    python3 -m evaluation --model_name $model_name --dataset_name $name
 done
