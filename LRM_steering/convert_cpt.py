@@ -1,4 +1,6 @@
 import argparse, json, os, torch
+os.environ["HF_HOME"] = "/home/kdh0901/Desktop/cache_dir/kdh0901/.cache/huggingface"
+os.environ["CUDA_VISIBLE_DEVICES"] = "4,5"
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from modeling_qwen2_custom import Qwen2ForCausalLMCustom
 
@@ -11,14 +13,14 @@ def main():
                          "one that already contains your *.py files)")
     ap.add_argument("--target_layer", type=int, default=10)
     ap.add_argument("--target_head", type=int, default=3)
-    ap.add_argument("--tau", type=float, default=0.20)
+    ap.add_argument("--tau", type=float, default=0.50)
     ap.add_argument("--alpha", type=float, default=0.15)
     args = ap.parse_args()
 
     # 1) Load original model (FP16 saves RAM, low_cpu_mem_usage avoids big spikes)
     base = AutoModelForCausalLM.from_pretrained(
         args.src,
-        torch_dtype=torch.float16,
+        torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
         trust_remote_code=True,      # Deepseek publishes its own model class
     )
@@ -31,14 +33,20 @@ def main():
     cfg.fire_threshold = args.tau
     cfg.sub_alpha = args.alpha
     cfg.architectures = ["Qwen2ForCausalLMCustom"]  # tells HF which class to pick
+    cfg.auto_map = {
+        "AutoModel": "modeling_qwen2_custom.Qwen2ForCausalLMCustom",
+        "AutoModelForCausalLM": "modeling_qwen2_custom.Qwen2ForCausalLMCustom",
+    }
 
     # 3) Build *our* model with that config
     custom = Qwen2ForCausalLMCustom(cfg)
-
+    print(base.state_dict().keys())
+    print(custom.state_dict().keys())
     # 4) Transfer weights (names are identical, so this is trivial)
     missing, unexpected = custom.load_state_dict(base.state_dict(), strict=False)
     if missing or unexpected:
         print("WARNING: keys unmatched\n  missing:", missing, "\n  unexpected:", unexpected)
+    print(custom._tied_weights_keys)
 
     # 5) Save – “safetensors” keeps one shard per 2 GB by default
     custom.save_pretrained(args.dst, safe_serialization=True)
