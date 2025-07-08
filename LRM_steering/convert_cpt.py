@@ -40,12 +40,22 @@ def main():
 
     # 3) Build *our* model with that config
     custom = Qwen2ForCausalLMCustom(cfg)
+    custom._tied_weights_keys = []
+    base._tied_weights_keys = []  # avoid warnings about tied weights
     print(base.state_dict().keys())
     print(custom.state_dict().keys())
     # 4) Transfer weights (names are identical, so this is trivial)
+    # We use strict=False because we know lm_head.weight might be missing from the base state_dict.
     missing, unexpected = custom.load_state_dict(base.state_dict(), strict=False)
-    if missing or unexpected:
-        print("WARNING: keys unmatched\n  missing:", missing, "\n  unexpected:", unexpected)
+    if unexpected or (missing and missing != ['lm_head.weight']):
+        print("WARNING: Unexpected key matching issues.")
+        print("  Missing keys:", missing)
+        print("  Unexpected keys:", unexpected)
+
+    # Manually copy the language model head weights from the base model.
+    print("Manually copying lm_head.weight from base model...")
+    custom.lm_head.weight.data.copy_(base.lm_head.weight.data)
+    print("Copy complete.")
     print(custom._tied_weights_keys)
 
     # 5) Save – “safetensors” keeps one shard per 2 GB by default

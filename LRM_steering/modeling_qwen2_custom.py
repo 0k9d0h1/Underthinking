@@ -8,7 +8,11 @@ from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2DecoderLayer,
     Qwen2ForCausalLM,
 )
-
+import os
+target_layer = int(os.environ.get("TARGET_LAYER", "10"))
+target_head = int(os.environ.get("TARGET_HEAD", "3"))
+fire_threshold = float(os.environ.get("FIRE_THRESHOLD", "0.50"))
+sub_alpha = float(os.environ.get("SUB_ALPHA", "0.15"))
 
 # ---------------------------------------------------------------------
 class CustomAttention(Qwen2Attention):
@@ -27,10 +31,10 @@ class CustomAttention(Qwen2Attention):
         self.layer_idx: int = layer_idx if layer_idx is not None else -1
 
         # hyper-params from config
-        self.tgt_layer = config.target_layer
-        self.tgt_head = config.target_head
-        self.tau = config.fire_threshold
-        self.alpha = config.sub_alpha
+        self.tgt_layer = target_layer
+        self.tgt_head = target_head
+        self.tau = fire_threshold
+        self.alpha = sub_alpha
 
         # run-time state (one μ per batch row)
         self.register_buffer(
@@ -90,7 +94,7 @@ class CustomAttention(Qwen2Attention):
         self._maybe_init_state(hidden_states, attention_mask)
 
         # subtract α·μ from the *new* token only
-        # hidden_states[:, -1:] -= self.alpha * self.mean_vec
+        hidden_states[:, -1:] -= self.alpha * self.mean_vec
 
         # Ensure we get attention probs back
         kwargs["output_attentions"] = True

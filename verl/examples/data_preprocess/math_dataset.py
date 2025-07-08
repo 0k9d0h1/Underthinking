@@ -21,7 +21,7 @@ import os
 import datasets
 
 from verl.utils.hdfs_io import copy, makedirs
-from verl.utils.reward_score.math import last_boxed_only_string, remove_boxed
+from verl.utils.reward_score.math_ import last_boxed_only_string, remove_boxed
 
 
 def extract_solution(solution_str):
@@ -44,7 +44,9 @@ if __name__ == "__main__":
     train_dataset = dataset["train"]
     test_dataset = dataset["test"]
 
-    instruction_following = "Let's think step by step and output the final answer within \\boxed{}."
+    instruction_following = (
+        "Let's think step by step and output the final answer within \\boxed{}."
+    )
 
     # add a row to each data item that represents a unique id
     def make_map_fn(split):
