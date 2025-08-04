@@ -21,7 +21,7 @@ import os
 import datasets
 
 from verl.utils.hdfs_io import copy, makedirs
-from verl.utils.reward_score.math import last_boxed_only_string, remove_boxed
+from verl.utils.reward_score.math_ import last_boxed_only_string, remove_boxed
 
 
 def extract_solution(solution_str):
@@ -39,19 +39,17 @@ if __name__ == "__main__":
     # Use mirror repo: DigitalLearningGmbH/MATH-lighteval
     data_source = "Hothan/OlympiadBench"
     print(f"Loading the {data_source} dataset from huggingface...", flush=True)
-    maths_dataset = datasets.load_dataset(
-        data_source,
-        "OE_TO_maths_en_COMP"
+    maths_dataset = datasets.load_dataset(data_source, "OE_TO_maths_en_COMP")
+    physics_dataset = datasets.load_dataset(data_source, "OE_TO_physics_en_COMP")
+    dataset = datasets.concatenate_datasets(
+        [maths_dataset["train"], physics_dataset["train"]]
     )
-    physics_dataset = datasets.load_dataset(
-        data_source,
-        "OE_TO_physics_en_COMP"
-    )
-    dataset = datasets.concatenate_datasets([maths_dataset['train'], physics_dataset['train']])
 
     test_dataset = dataset
 
-    instruction_following = "Let's think step by step and output the final answer within \\boxed{}."
+    instruction_following = (
+        "Let's think step by step and output the final answer within \\boxed{}."
+    )
 
     # add a row to each data item that represents a unique id
     def make_map_fn(split):

@@ -22,7 +22,7 @@ import random
 import datasets
 
 from verl.utils.hdfs_io import copy, makedirs
-from verl.utils.reward_score.math import last_boxed_only_string, remove_boxed
+from verl.utils.reward_score.math_ import last_boxed_only_string, remove_boxed
 
 
 def extract_solution(solution_str):
@@ -52,11 +52,15 @@ if __name__ == "__main__":
     math500_problems = set([ex["problem"].strip() for ex in math500_test])
 
     # Step 2: Filter out examples from MATH-lighteval test set that overlap
-    filtered_test = test_dataset.filter(lambda ex: ex["problem"].strip() not in math500_problems)
+    filtered_test = test_dataset.filter(
+        lambda ex: ex["problem"].strip() not in math500_problems
+    )
 
     print(f"Original MATH-lighteval test size: {len(test_dataset)}")
     print(f"Filtered MATH-lighteval test size (no overlap): {len(filtered_test)}")
-    assert len(filtered_test) + len(math500_test) == len(test_dataset), "Filtered test set size mismatch!"
+    assert len(filtered_test) + len(math500_test) == len(
+        test_dataset
+    ), "Filtered test set size mismatch!"
 
     # Step 3: Randomly select 500 problems (or all, if less than 500 left)
     num_samples = min(500, len(filtered_test))
@@ -65,7 +69,9 @@ if __name__ == "__main__":
 
     print(f"Final test set size: {len(filtered_test_500)}")
 
-    instruction_following = "Let's think step by step and output the final answer within \\boxed{}."
+    instruction_following = (
+        "Let's think step by step and output the final answer within \\boxed{}."
+    )
 
     # add a row to each data item that represents a unique id
     def make_map_fn(split):
@@ -88,7 +94,9 @@ if __name__ == "__main__":
         return process_fn
 
     train_dataset = train_dataset.map(function=make_map_fn("train"), with_indices=True)
-    test_dataset = filtered_test_500.map(function=make_map_fn("test"), with_indices=True)
+    test_dataset = filtered_test_500.map(
+        function=make_map_fn("test"), with_indices=True
+    )
 
     local_dir = args.local_dir
     hdfs_dir = args.hdfs_dir
