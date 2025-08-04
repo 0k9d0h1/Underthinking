@@ -32,7 +32,7 @@ def main():
     cfg.target_head = args.target_head
     cfg.fire_threshold = args.tau
     cfg.sub_alpha = args.alpha
-    cfg.architectures = ["Qwen2ForCausalLMCustom"]  # tells HF which class to pick
+    cfg.architectures = ["Qwen2ForCausalLM"]  # tells HF which class to pick
     cfg.auto_map = {
         "AutoModel": "modeling_qwen2_custom.Qwen2ForCausalLMCustom",
         "AutoModelForCausalLM": "modeling_qwen2_custom.Qwen2ForCausalLMCustom",
