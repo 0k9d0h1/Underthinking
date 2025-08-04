@@ -19,3 +19,4 @@ PRM/reg_dp/
 .gradio/
 .env
 temp.py
+*.pyc

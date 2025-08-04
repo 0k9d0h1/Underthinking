@@ -34,32 +34,6 @@ def load_data(split_path, cluster_path):
     return splits, clusters
 
 
-def tokenise_phrases(phrases, tokenizer):
-    """
-    Tokenises every phrase *without* special tokens so we know exact boundaries,
-    then concatenates them with a single EOS token in-between.  Returns
-
-        input_ids             – torch.tensor([seq_len])
-        phrase_token_ranges   – list[(start, end))  (end exclusive)
-    """
-    eos = tokenizer.eos_token_id
-    all_ids, ranges = [], []
-    cursor = 0
-
-    for ph in phrases:
-        ids = tokenizer.encode(ph, add_special_tokens=False)
-        all_ids.extend(ids)
-        ranges.append((cursor, cursor + len(ids)))
-        cursor += len(ids)
-
-        # separator
-        all_ids.append(eos)
-        cursor += 1
-
-    input_ids = torch.tensor([all_ids], dtype=torch.long)
-    return input_ids, ranges
-
-
 def cluster_metrics(true_seq, reps_layer, seed):
     """
     true_seq: list[str] cluster id *per phrase*.
@@ -130,6 +104,7 @@ def _attention_mass(attn, ranges, pairs):
 
 
 def detect_burst_heads_2d(
+    prob_idx,
     attn,  # (L, H, S, S)
     ranges,
     cluster_seq,
@@ -144,7 +119,7 @@ def detect_burst_heads_2d(
     cache=None,
     nms_size=3,  # window size for local maxima
 ):
-    attn = attn.to("cuda:1")  # move to GPU for speed
+    attn = attn.to("cuda")  # move to GPU for speed
     L, H, S, _ = attn.shape
     ids = cache["ids"]
     examples = []
@@ -204,21 +179,20 @@ def detect_burst_heads_2d(
                     k_tok_phrase_num = i
             q_tok_cluster = cluster_seq[q_tok_phrase_num]
             k_tok_cluster = cluster_seq[k_tok_phrase_num]
-            transition = False
-            if q_tok_cluster != "UNK":
-                transition = (
-                    int(q_tok_cluster) in cluster_transition_indices
-                    and q_tok <= ranges[int(q_tok_cluster)][0] + 3
-                ) or (
-                    int(q_tok_cluster) + 1 in cluster_transition_indices
-                    and ranges[int(q_tok_cluster)][1] - 3 <= q_tok
-                )
+            transition = (
+                int(q_tok_phrase_num) in cluster_transition_indices
+                and q_tok <= ranges[int(q_tok_phrase_num)][0] + 3
+            ) or (
+                int(q_tok_phrase_num) + 1 in cluster_transition_indices
+                and ranges[int(q_tok_phrase_num)][1] - 3 <= q_tok
+            )
 
             q0, q1 = max(0, q_tok - alpha), min(S, q_tok + alpha + 1)
             k0, k1 = max(0, k_tok - alpha), min(S, k_tok + alpha + 1)
 
             examples.append(
                 {
+                    "idx": prob_idx,
                     "layer": layer,
                     "head": h,
                     "spike_scr": round(score, 2),
@@ -279,14 +253,13 @@ def incremental_run(
     L = model.config.num_hidden_layers
     H = model.config.num_attention_heads
     D = model.config.hidden_size
-    EOS = tokenizer.eos_token_id
 
     # tokenise every phrase --------------------------------------------
     ids_per_phrase = [
         tokenizer.encode(t, add_special_tokens=False) for t in phrase_texts
     ]
-    for ids in ids_per_phrase[:-1]:  # EOS between phrases
-        ids.append(EOS)
+    input_ids = torch.cat([torch.Tensor(ids) for ids in ids_per_phrase], dim=0)
+    input_ids = input_ids.to(torch.long)
 
     attn_rows = [[] for _ in range(L)] if want_attn else None
     hs_rows = [[] for _ in range(L + 1)] if want_hidden else None
@@ -331,7 +304,7 @@ def incremental_run(
 
         phrase_end = cursor
         tok_ranges.append((phrase_start, phrase_end))
-    return attn_rows, hs_rows, tok_ranges
+    return input_ids, attn_rows, hs_rows, tok_ranges
 
 
 def pad_and_cat(slices, T_final):
@@ -423,11 +396,7 @@ def main(args):
         cluster_seq = [phr_to_cluster.get(i, "UNK") for i in range(len(phrases))]
 
         # ------------- forward pass (may need micro-batching if sequence huge) ----
-        input_ids, ranges = tokenise_phrases(phrases, tokenizer)
-        ids_len = input_ids.size(1)
-
-        input_ids = input_ids.to(next(model.parameters()).device)
-        attn_rows, hs_rows, ranges = incremental_run(
+        input_ids, attn_rows, hs_rows, ranges = incremental_run(
             model,
             tokenizer,
             phrases,
@@ -439,6 +408,7 @@ def main(args):
         if len(ranges) == 0:
             print(f"Skipping example #{idx} with no valid ranges.")
             continue
+
         cluster_seq = cluster_seq[: len(ranges)]  # truncate to match ranges
         cluster_transition_indices = []
         for i in range(1, len(cluster_seq)):
@@ -451,7 +421,8 @@ def main(args):
         reps_layers = []
         for layer_act in hs_rows:  # len = L+1
             layer_cat = torch.cat(layer_act, 0)  # (T, D)
-            reps = [layer_cat[s:e].mean(0) for s, e in ranges]
+            reps = [layer_cat[e - 1] for s, e in ranges]
+            # reps = [layer_cat[s:e].mean(0) for s, e in ranges]
             reps_layers.append(torch.stack(reps, 0))
         for l, reps in enumerate((reps_layers)):
             res = cluster_metrics(cluster_seq, reps, rng_seed)
@@ -479,6 +450,7 @@ def main(args):
                 0
             )  # (1, H, T_final, T_final)
             bursts_in_layer = detect_burst_heads_2d(
+                idx,
                 layer_attn_full_unsqueezed,  # (1, H, T_final, T_final)
                 ranges,
                 cluster_seq,
@@ -488,7 +460,7 @@ def main(args):
                 alpha=alpha,
                 spike_th=spike_th,  # adjust if you get too many / few heads
                 burst_z=burst_z,
-                cache={"ids": input_ids[0].cpu().tolist()},
+                cache={"ids": input_ids.cpu().tolist()},
                 nms_size=nms_size,
             )
             burst_examples.extend(bursts_in_layer)
@@ -524,7 +496,7 @@ def main(args):
     plt.title("Per-layer clustering quality")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(output_dir + "/per_layer_clustering.png")
+    plt.savefig(output_dir + "/per_layer_clustering_last_hidden.png")
     plt.close()
 
     # ---- within vs inter cluster attention

@@ -1,39 +1,43 @@
-import argparse, os
-import ctranslate2
-import transformers
+import argparse, json, os
+
+os.environ["HF_HOME"] = "/home/kdh0901/Desktop/cache_dir/kdh0901/.cache/huggingface"
+os.environ["CUDA_VISIBLE_DEVICES"] = "4,5"
+from vllm import LLM, SamplingParams
+import argparse
+from transformers import AutoModelForCausalLM
+
 
 def main(args):
-    # CTranslate2 can run on multiple GPUs. We list the device indexes.
-    device_indices = [0, 1]
-    
-    # Load the CTranslate2 model and the tokenizer
-    generator = ctranslate2.Generator(args.model, device="cuda", device_index=device_indices)
-    tokenizer = transformers.AutoTokenizer.from_pretrained(args.tokenizer_path)
+    # vLLM automatically respects the new class once we allow remote code
+    llm = LLM(model=args.model, trust_remote_code=True, dtype="bfloat16")
 
-    # Prepare the prompt and generate text
-    text = tokenizer.apply_chat_template(
-        [{"role": "user", "content": args.prompt}],
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-    tokens = tokenizer.convert_ids_to_tokens(tokenizer.encode(text))
-    results = generator.generate_batch(
-        [tokens],
-        max_length=32768,
-        sampling_temperature=0.7,
-        include_prompt_in_result=False,
-    )
+    out = llm.generate([args.prompt], SamplingParams(max_tokens=128, temperature=0.7))
 
-    # Decode and print the output
-    output_text = tokenizer.decode(results[0].sequences_ids[0])
-    print(output_text)
+    print(out[0].outputs[0].text)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True,
-                        help="Path to the converted CTranslate2 model directory")
-    parser.add_argument("--tokenizer_path", required=True,
-                        help="Path to the original Hugging Face model to load the tokenizer")
-    parser.add_argument("--prompt", default="What is 123 * 123?")
+    parser.add_argument(
+        "--model",
+        required=True,
+        help="Path or HF repo name; must contain the custom code + weights",
+    )
+    parser.add_argument(
+        "--prompt", default="Hello, explain quantum tunnelling in one paragraph."
+    )
     args = parser.parse_args()
+
+    model = AutoModelForCausalLM.from_pretrained(
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        torch_dtype="bfloat16",
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    print(model.config.tie_word_embeddings)
+    print(
+        model.get_input_embeddings().weight.data_ptr()
+        == model.lm_head.weight.data_ptr()
+    )
+    exit()
     main(args)
