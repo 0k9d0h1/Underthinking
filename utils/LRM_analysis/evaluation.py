@@ -6,6 +6,7 @@ import logging
 from math_verify.errors import TimeoutException
 from math_verify.metric import math_metric
 from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
+from transformers import AutoTokenizer
 
 # Set up logging
 logging.basicConfig(
@@ -98,6 +99,9 @@ def process_jsonl_file(args):
     dataset_name = args.dataset_name
     input_file = f"./{model_name.split('/')[-1].replace('-', '_')}/{dataset_name.split('/')[-1].replace('-', '_')}_generation.jsonl"
     output_file = f"./{model_name.split('/')[-1].replace('-', '_')}/{dataset_name.split('/')[-1].replace('-', '_')}_evaluation.jsonl"
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name
+    )
 
     logger.info(f"Processing input file: {input_file}")
 
@@ -113,6 +117,8 @@ def process_jsonl_file(args):
                     problem = data.get("problem", "")
                     correct_answer = data.get("correct_answer")
                     model_response = data.get("model_response", "")
+                    model_response_tokenized = tokenizer(model_response)["input_ids"]
+                    model_response = tokenizer.decode(model_response_tokenized[:16384])
 
                     # Skip if missing required fields
                     if not all([problem, correct_answer is not None, model_response]):
@@ -122,9 +128,9 @@ def process_jsonl_file(args):
                         continue
 
                     # Evaluate the response
-                    if "aime" in dataset_name.lower():
+                    if "gpqa" not in dataset_name.lower():
                         score = acc_reward(model_response, str(correct_answer))
-                    elif "gpqa" in dataset_name.lower():
+                    else:
                         match = re.search(ANSWER_PATTERN_MULTICHOICE, model_response)
                         extracted_answer = match.group(1) if match else None
                         score = 1.0 if extracted_answer == correct_answer else 0.0

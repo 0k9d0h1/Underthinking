@@ -3,10 +3,10 @@
 export HF_HOME="/home/kdh0901/Desktop/cache_dir/kdh0901/.cache/huggingface"
 # The new script uses 'auto' device mapping, so CUDA_VISIBLE_DEVICES might be less critical
 # but we'll set it to be consistent with the original environment.
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=6,7
 
 # This should be updated to the path or HF name of your custom model
-model_name="/home/kdh0901/Desktop/cache_dir/kdh0901/custom_r1_distill_qwen_7b" 
+model_name="/home/kdh0901/Desktop/cache_dir/kdh0901/custom_r1_distill_pc" 
 
 # Define the datasets to run on
 declare -A datasets

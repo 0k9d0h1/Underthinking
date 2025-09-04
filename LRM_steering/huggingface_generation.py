@@ -6,22 +6,32 @@ from tqdm import tqdm
 
 import pandas
 import torch
+import torch.nn as nn
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from modeling_qwen2_custom import Qwen2ForCausalLMCustom
+
+
+class SimpleClassifier(nn.Module):
+    def __init__(self, input_dim, hidden_dim=256):
+        super(SimpleClassifier, self).__init__()
+        self.layer1 = nn.Linear(input_dim, hidden_dim)
+        self.relu = nn.ReLU()
+        self.layer2 = nn.Linear(hidden_dim, 1)
+
+    def forward(self, x):
+        x = self.layer1(x)
+        x = self.relu(x)
+        x = self.layer2(x)
+        return x
 
 
 # Set environment variables if needed, e.g., for cache directories
 # os.environ["HF_HOME"] = "/path/to/your/cache"
 
 dataset_to_problem_answer_id = {
-    "Maxwell-Jia/AIME_2024": {
-        "problem": "Problem",
-        "answer": "Answer"
-    },
-    "yentinglin/aime_2025": {
-        "problem": "problem",
-        "answer": "answer"
-    }
+    "Maxwell-Jia/AIME_2024": {"problem": "Problem", "answer": "Answer"},
+    "yentinglin/aime_2025": {"problem": "problem", "answer": "answer"},
 }
 
 
@@ -71,14 +81,23 @@ D) {choices_dict['D']}
 def main(args):
     # 1) Model and Tokenizer Initialization
     print(f"Loading model: {args.model_name}")
-    model = AutoModelForCausalLM.from_pretrained(
+    model = Qwen2ForCausalLMCustom.from_pretrained(
         args.model_name,
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
         device_map="auto",
-        attn_implementation="eager"
+        attn_implementation="flash_attention_2",
     )
     model.eval()
+    classifier = SimpleClassifier(input_dim=3584)
+    classifier.load_state_dict(torch.load(args.classifier_dir, map_location="cpu"))
+
+    # Move classifier to the same device as the target layer
+    target_device = model.model.layers[27].self_attn.q_proj.weight.device
+    classifier.to(target_device)
+
+    classifier.eval()
+    model.model.layers[27].self_attn.classifier = classifier
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     print("Model and tokenizer loaded.")
 
@@ -113,8 +132,6 @@ def main(args):
     # 4) Generation Loop
     with open(output_file, "a") as fout:
         for i, data in enumerate(tqdm(dataset, desc="Generating responses")):
-            if "AIME_2024" in args.dataset_name and i < 28:
-                continue
             problem, messages, correct_answer = get_prompt_and_answer(
                 data, args.dataset_name
             )
@@ -129,6 +146,10 @@ def main(args):
             for _ in range(args.rollout_num):
                 # Reset the fire recorder before each generation
                 model.fire_recorder.reset()
+                # Reset the state of custom attention layers
+                for layer in model.model.layers:
+                    if hasattr(layer.self_attn, "reset"):
+                        layer.self_attn.reset()
                 # Generate response
                 with torch.no_grad():
                     outputs = model.generate(
@@ -138,7 +159,7 @@ def main(args):
                         top_p=args.top_p,
                         do_sample=True,
                         pad_token_id=tokenizer.eos_token_id,
-                        use_cache=True
+                        use_cache=True,
                     )
 
                 generated_ids = outputs[0, prompt_len:]
@@ -161,8 +182,10 @@ def main(args):
                             if gen_token_idx < len(generated_ids):
                                 gen_token_id = generated_ids[gen_token_idx]
                                 generation_fired_tokens.append(int(gen_token_id))
-                
-                decoded_fired_tokens = tokenizer.convert_ids_to_tokens(generation_fired_tokens)
+
+                decoded_fired_tokens = tokenizer.convert_ids_to_tokens(
+                    generation_fired_tokens
+                )
 
                 # Save results
                 result = {
@@ -174,8 +197,8 @@ def main(args):
                     "fire_info": {
                         "total_fires_in_generation": len(generation_fired_tokens),
                         "fired_token_ids": generation_fired_tokens,
-                        "fired_tokens": decoded_fired_tokens
-                    }
+                        "fired_tokens": decoded_fired_tokens,
+                    },
                 }
                 fout.write(json.dumps(result) + "\n")
                 fout.flush()
@@ -217,6 +240,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--rollout_num", type=int, default=1, help="Number of rollouts to perform"
+    )
+    parser.add_argument(
+        "--classifier_dir",
+        type=str,
+        default="/home/kdh0901/Desktop/Underthinking/model_outputs/best_classifier_layer_27.pt",
+        help="Path to the classifier model.",
     )
     args = parser.parse_args()
     main(args)

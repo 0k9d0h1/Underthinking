@@ -2,6 +2,7 @@ import json
 import re
 import openai
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1,4,5,6"
 from datasets import load_dataset
 from tqdm import tqdm
 from PIL import Image
@@ -32,7 +33,7 @@ def split_text_by_phrases(text):
         list: A list of phrases including the first phrase and those starting with the specified words
     """
     # Define the keywords we're looking for
-    keywords = ["Alternatively", "Wait", "Hmm"]
+    keywords = ["Alternatively", "Wait", "Hmm", "But wait"]
     
     # Create a list to store all phrases
     all_phrases = []
@@ -55,7 +56,7 @@ def split_text_by_phrases(text):
             all_phrases.append(first_phrase)
     
     # Pattern to match phrases starting with our target words
-    pattern = r'(Alternatively|Wait|Hmm)(?:[^A-Z]|$).*?(?=(Alternatively|Wait|Hmm)(?:[^A-Z]|$)|$)'
+    pattern = r'(Alternatively|But wait|Wait|Hmm)(?:[^A-Z]|$).*?(?=(Alternatively|But wait|Wait|Hmm)(?:[^A-Z]|$)|$)'
     
     # Find all matches
     matches = re.findall(pattern, text, re.DOTALL)
@@ -86,14 +87,14 @@ def split_text_by_phrases(text):
     
     return all_phrases
 
-def get_gpt4o_answer(question):
+def get_gpt_answer(question):
     """Function to get GPT-4o's answer with automatic retry on rate limit errors."""
     for i in range(10):
         try:
             response = client.chat.completions.create(
             model="gpt-4.1",
             messages=[
-                {"role": "system", "content": "You are an AI answering visual questions."},
+                {"role": "system", "content": "You are an expert on analysing and clustering reasoning processes about math problems."},
                 {"role": "user", "content": [{"type": "text", "text": question},]},
                 ],
                 max_tokens=32768,
@@ -110,10 +111,11 @@ def get_gpt4o_answer(question):
             print(f"Unexpected error: {e}")
             return None
 
-input_files = ["../outputs/Underthinking_Reproduction_gpqa_DeepSeek_R1_Distill_Qwen_14B_results.jsonl", "../outputs/Underthinking_Reproduction_AIME_2024_DeepSeek_R1_Distill_Qwen_14B_results.jsonl"]
-evaluation_files = ["../outputs/Underthinking_Reproduction_gpqa_DeepSeek_R1_Distill_Qwen_14B_results_evaluation.jsonl", "../outputs/Underthinking_Reproduction_AIME_2024_DeepSeek_R1_Distill_Qwen_14B_results_evaluation.jsonl"]
-output_file = "../outputs/Underthinking_Reproduction_Thought_cluster_4.1_Deepseek_R1_Distill_Qwen_14B.jsonl"
-split_output_file = "../outputs/Underthinking_Reproduction_Thought_split_Deepseek_R1_Distill_Qwen_14B.jsonl"
+model_name = "Qwen3_4B_Thinking_2507"
+input_files = [f"./{model_name}/DeepScaleR_Preview_Dataset_generation.jsonl"]
+evaluation_files = [f"./{model_name}/DeepScaleR_Preview_Dataset_evaluation.jsonl"]
+output_file = f"./{model_name}/DeepScaleR_Preview_Dataset_Thought_Cluster.jsonl"
+split_output_file = f"./{model_name}/DeepScaleR_Preview_Dataset_Thought_Split.jsonl"
 
 for input_file, evaluation_file in zip(input_files, evaluation_files):
     with open(input_file, "r") as f, open(evaluation_file, "r") as ef, open(output_file, "a") as of, open(split_output_file, "a") as sf:
@@ -121,8 +123,8 @@ for input_file, evaluation_file in zip(input_files, evaluation_files):
             data = json.loads(line)
             eval_data = json.loads(eval_line)
             response = data["model_response"].split("</think>")[0]
-            if "gpt4o_answer" in eval_data:
-                correctness = "is: correct" in eval_data["gpt4o_answer"]
+            if "gpt_answer" in eval_data:
+                correctness = "is: correct" in eval_data["gpt_answer"]
             else:
                 correctness = eval_data["evaluation"]["is_correct"]
 
@@ -159,7 +161,7 @@ Thoughts: 1, 3, 7
 
 Now classify the following thoughts using this format."""
             phrases = split_text_by_phrases(response)
-            if len(phrases) > 1000 or len(phrases) == 0:
+            if len(phrases) > 1000 or len(phrases) == 0 or not correctness:
                 continue
 
             sf.write(json.dumps({"phrases": phrases}) + "\n")
@@ -167,10 +169,10 @@ Now classify the following thoughts using this format."""
             for i, phrase in enumerate(phrases):
                 prompt += f"\n\nThought {i}: [{phrase}]"
 
-            response = get_gpt4o_answer(prompt)
+            response = get_gpt_answer(prompt)
 
             of.write(json.dumps({
-                "gpt4o_answer": response,
+                "gpt_answer": response,
                 "correctness": correctness
             }) + "\n")
             of.flush()

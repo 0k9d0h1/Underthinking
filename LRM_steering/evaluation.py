@@ -6,6 +6,7 @@ import logging
 from math_verify.errors import TimeoutException
 from math_verify.metric import math_metric
 from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
+from transformers import AutoTokenizer
 
 # Set up logging
 logging.basicConfig(
@@ -99,7 +100,7 @@ def process_jsonl_file(args):
     input_file = f"./model_outputs/{model_name.split('/')[-1].replace('-', '_')}/{dataset_name.split('/')[-1].replace('-', '_')}_generation.jsonl"
     output_file = f"./model_outputs/{model_name.split('/')[-1].replace('-', '_')}/{dataset_name.split('/')[-1].replace('-', '_')}_evaluation.jsonl"
 
-    logger.info(f"Processing input file: {input_file}")
+    print(f"Processing input file: {input_file}")
 
     try:
         with open(input_file, "r", encoding="utf-8") as f:
@@ -151,7 +152,7 @@ def process_jsonl_file(args):
 
     # Calculate accuracy
     accuracy = correct_count / total_count if total_count > 0 else 0
-    logger.info(
+    print(
         f"Evaluation complete. Accuracy: {correct_count}/{total_count} ({accuracy:.2%})"
     )
 
@@ -160,7 +161,7 @@ def process_jsonl_file(args):
         with open(output_file, "w", encoding="utf-8") as f:
             for result in results:
                 f.write(json.dumps(result, ensure_ascii=False) + "\n")
-        logger.info(f"Results saved to {output_file}")
+        print(f"Results saved to {output_file}")
     except Exception as e:
         logger.error(f"Error writing output file: {str(e)}")
 
